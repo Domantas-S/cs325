@@ -19,7 +19,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include <algorithm>
-#include <cassert>
+#include <cassert> 
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -396,6 +396,7 @@ public:
   virtual std::string to_string() const {return "";};
 };
 
+
 /// IntASTnode - Class for integer literals like 1, 2, 10,
 class IntASTnode : public ASTnode {
   int Val;
@@ -408,7 +409,135 @@ public:
   // virtual std::string to_string() const override {
   // return a sting representation of this AST node
   //};
+  
 };
+
+class FloatASTnode : public ASTnode {
+  float Val;
+  TOKEN Tok;
+  std::string Name;
+
+public:
+  FloatASTnode(TOKEN tok, float val) : Val(val), Tok(tok) {}
+  virtual Value *codegen() override;
+  // virtual std::string to_string() const override {
+  // return a sting representation of this AST node
+  //
+
+};
+
+class BoolASTnode : public ASTnode {
+  bool Val;
+  TOKEN Tok;
+  std::string Name;
+
+public:
+  BoolASTnode(TOKEN tok, int val) : Val(val), Tok(tok) {}
+  virtual Value *codegen() override;
+  // virtual std::string to_string() const override {
+  // return a sting representation of this AST node
+  //};
+};
+
+class VariableASTnode : public ASTnode {
+  std::string Val;
+  TOKEN Tok;
+  std::string Name;
+  std::string Type;
+
+  public:
+  VariableASTnode(TOKEN tok, std::string val) : Val(val), Tok(tok) {}
+  virtual Value *codegen() override;
+  // virtual std::string to_string() const override {
+  // return a sting representation of this AST node
+  //};
+};
+
+class BinOpNode : public ASTnode {
+  char Op;
+  std::unique_ptr<ASTnode> LHS, RHS;
+
+};
+
+class UnaryOpNode : public ASTnode {
+  char Op;
+  std::unique_ptr<ASTnode> RHS;
+
+};
+
+class FunctionASTnode : public ASTnode {
+  std::string Name;
+  std::vector<std::unique_ptr<ASTnode>> Args;
+  std::unique_ptr<ASTnode> Body;
+
+};
+
+class PrototypeASTnode : public ASTnode {
+  std::string Name;
+  std::vector<std::unique_ptr<ASTnode>> Args;
+  bool IsOperator;
+  unsigned Precedence;
+
+};
+
+class ExternASTnode : public ASTnode {
+  std::string Name;
+  std::vector<std::unique_ptr<ASTnode>> Args;
+  bool IsOperator;
+  unsigned Precedence;
+
+};
+
+class IfASTnode : public ASTnode {
+  std::unique_ptr<ASTnode> Cond;
+  std::unique_ptr<ASTnode> Then;
+  std::unique_ptr<ASTnode> Else;
+
+};
+
+class WhileASTnode : public ASTnode {
+  std::unique_ptr<ASTnode> Cond;
+  std::unique_ptr<ASTnode> Body;
+
+};
+
+class ReturnASTnode : public ASTnode {
+  std::unique_ptr<ASTnode> Val;
+
+};
+
+class CallASTnode : public ASTnode {
+  std::string Callee;
+  std::vector<std::unique_ptr<ASTnode>> Args;
+
+};
+
+class DeclASTnode : public ASTnode {
+  std::string Name;
+  std::string Type;
+  std::unique_ptr<ASTnode> Val;
+
+};
+
+class DeclListASTnode : public ASTnode {
+  std::vector<std::unique_ptr<ASTnode>> Decls;
+
+};
+
+class ExternListASTnode : public ASTnode {
+  std::vector<std::unique_ptr<ASTnode>> Externs;
+
+};
+
+class ProgramASTnode : public ASTnode {
+  std::unique_ptr<ASTnode> Externs;
+  std::unique_ptr<ASTnode> Decls;
+
+};
+
+
+
+
 
 /* add other AST nodes as nessasary */
 
@@ -418,9 +547,70 @@ public:
 
 /* Add function calls for each production */
 
-// program ::= extern_list decl_list
+// program ::= extern_list decl_list | decl_list
+static std::unique_ptr<ProgramASTnode> parseProgram() {
+  
+};
+
+static std::unique_ptr<IntASTnode> parseInt() {
+  TOKEN tok = CurTok;
+  if (CurTok.type == INT_LIT) {
+    getNextToken();
+    return std::make_unique<IntASTnode>(tok, IntVal);
+  } else {
+    fprintf(stderr, "Error: Expected integer literal\n");
+    exit(1);
+  }
+};
+
+static std::unique_ptr<FloatASTnode> parseFloat() {
+  TOKEN tok = CurTok;
+  if (CurTok.type == FLOAT_LIT) {
+    getNextToken();
+    return std::make_unique<FloatASTnode>(tok, FloatVal);
+  } else {
+    fprintf(stderr, "Error: Expected float literal\n");
+    exit(1);
+  }
+};
+
+static std::unique_ptr<BoolASTnode> parseBool() {
+  TOKEN tok = CurTok;
+  if (CurTok.type == BOOL_LIT) {
+    getNextToken();
+    return std::make_unique<BoolASTnode>(tok, BoolVal);
+  } else {
+    fprintf(stderr, "Error: Expected bool literal\n");
+    exit(1);
+  }
+};
+
+static std::unique_ptr<VariableASTnode> parseVariable() {
+  TOKEN tok = CurTok;
+  if (CurTok.type == IDENT) {
+    getNextToken();
+    return std::make_unique<VariableASTnode>(tok, IdentifierStr);
+  } else {
+    fprintf(stderr, "Error: Expected variable\n");
+    exit(1);
+  }
+};
+
+
+
+
 static void parser() {
   // add body
+}
+
+/// LogError* - These are little helper functions for error handling.
+std::unique_ptr<ASTnode> LogError(const char *Str) {
+  fprintf(stderr, "Error: %s\n", Str);
+  return nullptr;
+}
+std::unique_ptr<ASTnode> LogErrorP(const char *Str) {
+  LogError(Str);
+  return nullptr;
 }
 
 //===----------------------------------------------------------------------===//
