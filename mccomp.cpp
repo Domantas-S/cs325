@@ -1,625 +1,608 @@
-#include "llvm/ADT/APFloat.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/Constants.h"
-#include "llvm/IR/DerivedTypes.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/LLVMContext.h"
-#include "llvm/IR/LegacyPassManager.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Type.h"
-#include "llvm/IR/Verifier.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/TargetParser/Host.h"
-#include "llvm/MC/TargetRegistry.h"
-#include "llvm/Support/TargetSelect.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetMachine.h"
-#include "llvm/Target/TargetOptions.h"
-#include <algorithm>
-#include <cassert> 
-#include <cctype>
-#include <cstdio>
-#include <cstdlib>
-#include <iostream>
-#include <map>
-#include <memory>
-#include <queue>
-#include <string.h>
-#include <string>
-#include <system_error>
-#include <utility>
-#include <vector>
+#include "mccomp.hpp"
+#include "token.hpp"
+#include "astnode.hpp"
+// #include "codegen.hpp"
 
-using namespace llvm;
-using namespace llvm::sys;
 
-FILE *pFile;
-
-//===----------------------------------------------------------------------===//
-// Lexer
-//===----------------------------------------------------------------------===//
-
-// The lexer returns one of these for known things.
-enum TOKEN_TYPE {
-
-  IDENT = -1,        // [a-zA-Z_][a-zA-Z_0-9]*
-  ASSIGN = int('='), // '='
-
-  // delimiters
-  LBRA = int('{'),  // left brace
-  RBRA = int('}'),  // right brace
-  LPAR = int('('),  // left parenthesis
-  RPAR = int(')'),  // right parenthesis
-  SC = int(';'),    // semicolon
-  COMMA = int(','), // comma
-
-  // types
-  INT_TOK = -2,   // "int"
-  VOID_TOK = -3,  // "void"
-  FLOAT_TOK = -4, // "float"
-  BOOL_TOK = -5,  // "bool"
-
-  // keywords
-  EXTERN = -6,  // "extern"
-  IF = -7,      // "if"
-  ELSE = -8,    // "else"
-  WHILE = -9,   // "while"
-  RETURN = -10, // "return"
-  // TRUE   = -12,     // "true"
-  // FALSE   = -13,     // "false"
-
-  // literals
-  INT_LIT = -14,   // [0-9]+
-  FLOAT_LIT = -15, // [0-9]+.[0-9]+
-  BOOL_LIT = -16,  // "true" or "false" key words
-
-  // logical operators
-  AND = -17, // "&&"
-  OR = -18,  // "||"
-
-  // operators
-  PLUS = int('+'),    // addition or unary plus
-  MINUS = int('-'),   // substraction or unary negative
-  ASTERIX = int('*'), // multiplication
-  DIV = int('/'),     // division
-  MOD = int('%'),     // modular
-  NOT = int('!'),     // unary negation
-
-  // comparison operators
-  EQ = -19,      // equal
-  NE = -20,      // not equal
-  LE = -21,      // less than or equal to
-  LT = int('<'), // less than
-  GE = -23,      // greater than or equal to
-  GT = int('>'), // greater than
-
-  // special tokens
-  EOF_TOK = 0, // signal end of file
-
-  // invalid
-  INVALID = -100 // signal invalid token
-};
-
-// TOKEN struct is used to keep track of information about a token
-struct TOKEN {
-  int type = -100;
-  std::string lexeme;
-  int lineNo;
-  int columnNo;
-};
-
-static std::string IdentifierStr; // Filled in if IDENT
-static int IntVal;                // Filled in if INT_LIT
-static bool BoolVal;              // Filled in if BOOL_LIT
-static float FloatVal;            // Filled in if FLOAT_LIT
-static std::string StringVal;     // Filled in if String Literal
-static int lineNo, columnNo;
-
-static TOKEN returnTok(std::string lexVal, int tok_type) {
-  TOKEN return_tok;
-  return_tok.lexeme = lexVal;
-  return_tok.type = tok_type;
-  return_tok.lineNo = lineNo;
-  return_tok.columnNo = columnNo - lexVal.length() - 1;
-  return return_tok;
-}
-
-// Read file line by line -- or look for \n and if found add 1 to line number
-// and reset column number to 0
-/// gettok - Return the next token from standard input.
-static TOKEN gettok() {
-
-  static int LastChar = ' ';
-  static int NextChar = ' ';
-
-  // Skip any whitespace.
-  while (isspace(LastChar)) {
-    if (LastChar == '\n' || LastChar == '\r') {
-      lineNo++;
-      columnNo = 1;
-    }
-    LastChar = getc(pFile);
-    columnNo++;
-  }
-
-  if (isalpha(LastChar) ||
-      (LastChar == '_')) { // identifier: [a-zA-Z_][a-zA-Z_0-9]*
-    IdentifierStr = LastChar;
-    columnNo++;
-
-    while (isalnum((LastChar = getc(pFile))) || (LastChar == '_')) {
-      IdentifierStr += LastChar;
-      columnNo++;
-    }
-
-    if (IdentifierStr == "int")
-      return returnTok("int", INT_TOK);
-    if (IdentifierStr == "bool")
-      return returnTok("bool", BOOL_TOK);
-    if (IdentifierStr == "float")
-      return returnTok("float", FLOAT_TOK);
-    if (IdentifierStr == "void")
-      return returnTok("void", VOID_TOK);
-    if (IdentifierStr == "bool")
-      return returnTok("bool", BOOL_TOK);
-    if (IdentifierStr == "extern")
-      return returnTok("extern", EXTERN);
-    if (IdentifierStr == "if")
-      return returnTok("if", IF);
-    if (IdentifierStr == "else")
-      return returnTok("else", ELSE);
-    if (IdentifierStr == "while")
-      return returnTok("while", WHILE);
-    if (IdentifierStr == "return")
-      return returnTok("return", RETURN);
-    if (IdentifierStr == "true") {
-      BoolVal = true;
-      return returnTok("true", BOOL_LIT);
-    }
-    if (IdentifierStr == "false") {
-      BoolVal = false;
-      return returnTok("false", BOOL_LIT);
-    }
-
-    return returnTok(IdentifierStr.c_str(), IDENT);
-  }
-
-  if (LastChar == '=') {
-    NextChar = getc(pFile);
-    if (NextChar == '=') { // EQ: ==
-      LastChar = getc(pFile);
-      columnNo += 2;
-      return returnTok("==", EQ);
-    } else {
-      LastChar = NextChar;
-      columnNo++;
-      return returnTok("=", ASSIGN);
-    }
-  }
-
-  if (LastChar == '{') {
-    LastChar = getc(pFile);
-    columnNo++;
-    return returnTok("{", LBRA);
-  }
-  if (LastChar == '}') {
-    LastChar = getc(pFile);
-    columnNo++;
-    return returnTok("}", RBRA);
-  }
-  if (LastChar == '(') {
-    LastChar = getc(pFile);
-    columnNo++;
-    return returnTok("(", LPAR);
-  }
-  if (LastChar == ')') {
-    LastChar = getc(pFile);
-    columnNo++;
-    return returnTok(")", RPAR);
-  }
-  if (LastChar == ';') {
-    LastChar = getc(pFile);
-    columnNo++;
-    return returnTok(";", SC);
-  }
-  if (LastChar == ',') {
-    LastChar = getc(pFile);
-    columnNo++;
-    return returnTok(",", COMMA);
-  }
-
-  if (isdigit(LastChar) || LastChar == '.') { // Number: [0-9]+.
-    std::string NumStr;
-
-    if (LastChar == '.') { // Floatingpoint Number: .[0-9]+
-      do {
-        NumStr += LastChar;
-        LastChar = getc(pFile);
-        columnNo++;
-      } while (isdigit(LastChar));
-
-      FloatVal = strtof(NumStr.c_str(), nullptr);
-      return returnTok(NumStr, FLOAT_LIT);
-    } else {
-      do { // Start of Number: [0-9]+
-        NumStr += LastChar;
-        LastChar = getc(pFile);
-        columnNo++;
-      } while (isdigit(LastChar));
-
-      if (LastChar == '.') { // Floatingpoint Number: [0-9]+.[0-9]+)
-        do {
-          NumStr += LastChar;
-          LastChar = getc(pFile);
-          columnNo++;
-        } while (isdigit(LastChar));
-
-        FloatVal = strtof(NumStr.c_str(), nullptr);
-        return returnTok(NumStr, FLOAT_LIT);
-      } else { // Integer : [0-9]+
-        IntVal = strtod(NumStr.c_str(), nullptr);
-        return returnTok(NumStr, INT_LIT);
-      }
-    }
-  }
-
-  if (LastChar == '&') {
-    NextChar = getc(pFile);
-    if (NextChar == '&') { // AND: &&
-      LastChar = getc(pFile);
-      columnNo += 2;
-      return returnTok("&&", AND);
-    } else {
-      LastChar = NextChar;
-      columnNo++;
-      return returnTok("&", int('&'));
-    }
-  }
-
-  if (LastChar == '|') {
-    NextChar = getc(pFile);
-    if (NextChar == '|') { // OR: ||
-      LastChar = getc(pFile);
-      columnNo += 2;
-      return returnTok("||", OR);
-    } else {
-      LastChar = NextChar;
-      columnNo++;
-      return returnTok("|", int('|'));
-    }
-  }
-
-  if (LastChar == '!') {
-    NextChar = getc(pFile);
-    if (NextChar == '=') { // NE: !=
-      LastChar = getc(pFile);
-      columnNo += 2;
-      return returnTok("!=", NE);
-    } else {
-      LastChar = NextChar;
-      columnNo++;
-      return returnTok("!", NOT);
-      ;
-    }
-  }
-
-  if (LastChar == '<') {
-    NextChar = getc(pFile);
-    if (NextChar == '=') { // LE: <=
-      LastChar = getc(pFile);
-      columnNo += 2;
-      return returnTok("<=", LE);
-    } else {
-      LastChar = NextChar;
-      columnNo++;
-      return returnTok("<", LT);
-    }
-  }
-
-  if (LastChar == '>') {
-    NextChar = getc(pFile);
-    if (NextChar == '=') { // GE: >=
-      LastChar = getc(pFile);
-      columnNo += 2;
-      return returnTok(">=", GE);
-    } else {
-      LastChar = NextChar;
-      columnNo++;
-      return returnTok(">", GT);
-    }
-  }
-
-  if (LastChar == '/') { // could be division or could be the start of a comment
-    LastChar = getc(pFile);
-    columnNo++;
-    if (LastChar == '/') { // definitely a comment
-      do {
-        LastChar = getc(pFile);
-        columnNo++;
-      } while (LastChar != EOF && LastChar != '\n' && LastChar != '\r');
-
-      if (LastChar != EOF)
-        return gettok();
-    } else
-      return returnTok("/", DIV);
-  }
-
-  // Check for end of file.  Don't eat the EOF.
-  if (LastChar == EOF) {
-    columnNo++;
-    return returnTok("0", EOF_TOK);
-  }
-
-  // Otherwise, just return the character as its ascii value.
-  int ThisChar = LastChar;
-  std::string s(1, ThisChar);
-  LastChar = getc(pFile);
-  columnNo++;
-  return returnTok(s, int(ThisChar));
-}
-
-//===----------------------------------------------------------------------===//
-// Parser
-//===----------------------------------------------------------------------===//
-
-/// CurTok/getNextToken - Provide a simple token buffer.  CurTok is the current
-/// token the parser is looking at.  getNextToken reads another token from the
-/// lexer and updates CurTok with its results.
-static TOKEN CurTok;
-static std::deque<TOKEN> tok_buffer;
-
-static TOKEN getNextToken() {
-
-  if (tok_buffer.size() == 0)
-    tok_buffer.push_back(gettok());
-
-  TOKEN temp = tok_buffer.front();
-  tok_buffer.pop_front();
-
-  return CurTok = temp;
-}
-
-static void putBackToken(TOKEN tok) { tok_buffer.push_front(tok); }
-
-//===----------------------------------------------------------------------===//
-// AST nodes
-//===----------------------------------------------------------------------===//
-
-/// ASTnode - Base class for all AST nodes.
-class ASTnode {
-public:
-  virtual ~ASTnode() {}
-  virtual Value *codegen() = 0;
-  virtual std::string to_string() const {return "";};
-};
-
-
-/// IntASTnode - Class for integer literals like 1, 2, 10,
-class IntASTnode : public ASTnode {
-  int Val;
-  TOKEN Tok;
-  std::string Name;
-
-public:
-  IntASTnode(TOKEN tok, int val) : Val(val), Tok(tok) {}
-  virtual Value *codegen() override;
-  // virtual std::string to_string() const override {
-  // return a sting representation of this AST node
-  //};
-  
-};
-
-class FloatASTnode : public ASTnode {
-  float Val;
-  TOKEN Tok;
-  std::string Name;
-
-public:
-  FloatASTnode(TOKEN tok, float val) : Val(val), Tok(tok) {}
-  virtual Value *codegen() override;
-  // virtual std::string to_string() const override {
-  // return a sting representation of this AST node
-  //
-
-};
-
-class BoolASTnode : public ASTnode {
-  bool Val;
-  TOKEN Tok;
-  std::string Name;
-
-public:
-  BoolASTnode(TOKEN tok, int val) : Val(val), Tok(tok) {}
-  virtual Value *codegen() override;
-  // virtual std::string to_string() const override {
-  // return a sting representation of this AST node
-  //};
-};
-
-class VariableASTnode : public ASTnode {
-  std::string Val;
-  TOKEN Tok;
-  std::string Name;
-  std::string Type;
-
-  public:
-  VariableASTnode(TOKEN tok, std::string val) : Val(val), Tok(tok) {}
-  virtual Value *codegen() override;
-  // virtual std::string to_string() const override {
-  // return a sting representation of this AST node
-  //};
-};
-
-class BinOpNode : public ASTnode {
-  char Op;
-  std::unique_ptr<ASTnode> LHS, RHS;
-
-};
-
-class UnaryOpNode : public ASTnode {
-  char Op;
-  std::unique_ptr<ASTnode> RHS;
-
-};
-
-class FunctionASTnode : public ASTnode {
-  std::string Name;
-  std::vector<std::unique_ptr<ASTnode>> Args;
-  std::unique_ptr<ASTnode> Body;
-
-};
-
-class PrototypeASTnode : public ASTnode {
-  std::string Name;
-  std::vector<std::unique_ptr<ASTnode>> Args;
-  bool IsOperator;
-  unsigned Precedence;
-
-};
-
-class ExternASTnode : public ASTnode {
-  std::string Name;
-  std::vector<std::unique_ptr<ASTnode>> Args;
-  bool IsOperator;
-  unsigned Precedence;
-
-};
-
-class IfASTnode : public ASTnode {
-  std::unique_ptr<ASTnode> Cond;
-  std::unique_ptr<ASTnode> Then;
-  std::unique_ptr<ASTnode> Else;
-
-};
-
-class WhileASTnode : public ASTnode {
-  std::unique_ptr<ASTnode> Cond;
-  std::unique_ptr<ASTnode> Body;
-
-};
-
-class ReturnASTnode : public ASTnode {
-  std::unique_ptr<ASTnode> Val;
-
-};
-
-class CallASTnode : public ASTnode {
-  std::string Callee;
-  std::vector<std::unique_ptr<ASTnode>> Args;
-
-};
-
-class DeclASTnode : public ASTnode {
-  std::string Name;
-  std::string Type;
-  std::unique_ptr<ASTnode> Val;
-
-};
-
-class DeclListASTnode : public ASTnode {
-  std::vector<std::unique_ptr<ASTnode>> Decls;
-
-};
-
-class ExternListASTnode : public ASTnode {
-  std::vector<std::unique_ptr<ASTnode>> Externs;
-
-};
-
-class ProgramASTnode : public ASTnode {
-  std::unique_ptr<ASTnode> Externs;
-  std::unique_ptr<ASTnode> Decls;
-
-};
-
-
-
-
-
-/* add other AST nodes as nessasary */
 
 //===----------------------------------------------------------------------===//
 // Recursive Descent Parser - Function call for each production
 //===----------------------------------------------------------------------===//
 
-/* Add function calls for each production */
+
+static TOKEN funcRetType;
+
 
 // program ::= extern_list decl_list | decl_list
 static std::unique_ptr<ProgramASTnode> parseProgram() {
+  std::vector<std::unique_ptr<ExternASTnode>> externs = parseExternList();
+  std::vector<std::unique_ptr<ASTnode>> decls = parseDeclList();
+  return std::make_unique<ProgramASTnode>(std::move(externs), std::move(decls));
+};
+
+
+// extern_list ::= extern extern_list | extern
+static std::vector<std::unique_ptr<ExternASTnode>> parseExternList() {
+  std::vector<std::unique_ptr<ExternASTnode>> externs;
+  while (CurTok.type == EXTERN) {
+    externs.push_back(parseExtern());
+  }
+  return externs;
+};
+
+// extern ::= "extern" type_spec IDENT "(" params ")" ";"
+static std::unique_ptr<ExternASTnode> parseExtern() {
+  getNextToken(); // eat extern
+
+  std::unique_ptr<TypeASTnode> type = parseTypeSpec();  // eat type_spec
+
+  if (CurTok.type != IDENT) error(CurTok, "Expected identifier in extern declaration");
+  std::string externName = CurTok.lexeme;
+  TOKEN saveToken = CurTok;
+  getNextToken(); // eat IDENT
+
+  if (CurTok.type != LPAR) error(CurTok, "Expected ( in extern declaration");
+  getNextToken(); // eat (
   
+  std::vector<std::unique_ptr<ParamASTnode>> params = parseParams();
+
+  if (CurTok.type != RPAR) error(CurTok, "Expected ) in extern declaration");
+  getNextToken(); // eat )
+
+  if (CurTok.type != SC) error(CurTok, "Expected ; in extern declaration");
+  getNextToken(); // eat ;
+  return std::make_unique<ExternASTnode>(std::move(type), externName, std::move(params), saveToken);
 };
 
-static std::unique_ptr<IntASTnode> parseInt() {
-  TOKEN tok = CurTok;
-  if (CurTok.type == INT_LIT) {
-    getNextToken();
-    return std::make_unique<IntASTnode>(tok, IntVal);
+// decl_list ::= decl decl_list | decl
+static std::vector<std::unique_ptr<ASTnode>> parseDeclList() {
+  std::vector<std::unique_ptr<ASTnode>> decls;
+  while (CurTok.type != EOF_TOK) {
+    decls.push_back(parseDecl());
+  }
+  return decls;
+};
+
+// decl ::= var_decl | fun_decl
+static std::unique_ptr<ASTnode> parseDecl() {
+  std::unique_ptr<TypeASTnode> type = parseTypeSpec();
+  std::string name = CurTok.lexeme;
+  TOKEN saveToken = CurTok;
+  getNextToken(); // eat IDENT
+
+  if (CurTok.type == SC){
+    getNextToken(); // eat ;
+    return std::make_unique<VarDeclASTnode>(std::move(type), name, saveToken);
+  } else if (CurTok.type == LPAR) {
+    // fun_decl ::= type_spec IDENT "(" params ")" block
+    getNextToken(); // eat (
+    std::vector<std::unique_ptr<ParamASTnode>> params = parseParams();
+    if (CurTok.type != RPAR) 
+      error(CurTok, "Expected ) in function declaration");
+    getNextToken(); // eat )
+    std::unique_ptr<ASTnode> body = parseBlock();
+    return std::make_unique<FunctionASTnode>(std::move(type), name, std::move(params), std::move(body), saveToken);
   } else {
-    fprintf(stderr, "Error: Expected integer literal\n");
-    exit(1);
+    error(CurTok, "Expected ; or ( in declaration");
+    return nullptr;
   }
 };
 
-static std::unique_ptr<FloatASTnode> parseFloat() {
-  TOKEN tok = CurTok;
-  if (CurTok.type == FLOAT_LIT) {
-    getNextToken();
-    return std::make_unique<FloatASTnode>(tok, FloatVal);
+// var_decl ::= var_type IDENT ";"
+static std::unique_ptr<VarDeclASTnode> parseVarDecl() {
+  std::unique_ptr<TypeASTnode> type = parseVarType();
+
+  if (CurTok.type != IDENT) error(CurTok, "Expected identifier in variable declaration");
+  std::string varName = CurTok.lexeme;
+  TOKEN saveToken = CurTok;
+  getNextToken(); // eat IDENT
+
+  if (CurTok.type != SC) error(CurTok, "Expected ; in variable declaration");
+  getNextToken(); // eat ;
+  return std::make_unique<VarDeclASTnode>(std::move(type), varName, saveToken);
+};
+
+// type_spec ::= "void" | var_type
+static std::unique_ptr<TypeASTnode> parseTypeSpec() {
+  if (CurTok.type == VOID_TOK) {
+    TOKEN saveToken = CurTok;
+    getNextToken(); // eat void
+    return std::make_unique<TypeASTnode>("void", saveToken);
   } else {
-    fprintf(stderr, "Error: Expected float literal\n");
-    exit(1);
+    return parseVarType();
   }
 };
 
-static std::unique_ptr<BoolASTnode> parseBool() {
-  TOKEN tok = CurTok;
-  if (CurTok.type == BOOL_LIT) {
-    getNextToken();
-    return std::make_unique<BoolASTnode>(tok, BoolVal);
-  } else {
-    fprintf(stderr, "Error: Expected bool literal\n");
-    exit(1);
+// var_type ::= "int" | "float" | "bool"
+static std::unique_ptr<TypeASTnode> parseVarType() {
+  TOKEN saveToken = CurTok;
+  switch (CurTok.type)
+  {
+  case INT_TOK:
+    getNextToken(); // eat int
+    return std::make_unique<TypeASTnode>("int", saveToken);
+    break;
+  case FLOAT_TOK:
+    getNextToken(); // eat float
+    return std::make_unique<TypeASTnode>("float", saveToken);
+    break;
+  case BOOL_TOK:
+    getNextToken(); // eat bool
+    return std::make_unique<TypeASTnode>("bool", saveToken);
+    break;
+  default:
+    error(CurTok, "Expected a type here"); // TODO: add difference between variable declaration and function declaration (void)
+    return nullptr;
+    break;
   }
 };
 
-static std::unique_ptr<VariableASTnode> parseVariable() {
-  TOKEN tok = CurTok;
+// fun_decl ::= type_spec IDENT "(" params ")" block
+static std::unique_ptr<FunctionASTnode> parseFunctionDecl() {
+  std::unique_ptr<TypeASTnode> type = parseTypeSpec();
+
+  if (CurTok.type != IDENT) error(CurTok, "Expected identifier in function declaration");
+  std::string funcName = CurTok.lexeme;
+  TOKEN saveToken = CurTok;
+  getNextToken(); // eat IDENT
+
+  if (CurTok.type != LPAR) error(CurTok, "Expected ( in function declaration");
+  getNextToken(); // eat (
+
+  std::vector<std::unique_ptr<ParamASTnode>> params = parseParams();
+
+  if (CurTok.type != RPAR) error(CurTok, "Expected ) in function declaration");
+  getNextToken(); // eat )
+
+  std::unique_ptr<ASTnode> body = parseBlock();
+
+  return std::make_unique<FunctionASTnode>(std::move(type), funcName, std::move(params), std::move(body), saveToken);
+};
+
+// params ::= param_list | "void" | empty
+static std::vector<std::unique_ptr<ParamASTnode>> parseParams() {
+  std::vector<std::unique_ptr<ParamASTnode>> params;
+  if (CurTok.type == VOID_TOK) {
+    getNextToken(); // eat void
+    return params;
+  } else if (CurTok.type == RPAR) {
+    return params;
+  } else {
+    params = parseParamList();
+    return params;
+  }
+};
+
+// param_list ::= param "," param_list | param
+static std::vector<std::unique_ptr<ParamASTnode>> parseParamList() {
+  std::vector<std::unique_ptr<ParamASTnode>> params;
+  params.push_back(parseParam());
+  while (CurTok.type == COMMA) {
+    getNextToken(); // eat ,
+    params.push_back(parseParam());
+  }
+  return params;
+};
+
+// param ::= var_type IDENT
+static std::unique_ptr<ParamASTnode> parseParam() {
+  std::unique_ptr<TypeASTnode> type = parseVarType();
+
+  if (CurTok.type != IDENT) error(CurTok, "Expected identifier in parameter declaration");
+  std::string paramName = CurTok.lexeme;
+  TOKEN saveToken = CurTok;
+  getNextToken(); // eat IDENT
+
+  return std::make_unique<ParamASTnode>(std::move(type), paramName, saveToken);
+};
+
+// block ::= "{" local_decls stmt_list "}"
+static std::unique_ptr<BlockASTnode> parseBlock() {
+  if (CurTok.type != LBRA) error(CurTok, "Expected { in block");
+  TOKEN saveToken = CurTok;
+  getNextToken(); // eat {
+
+  std::vector<std::unique_ptr<ASTnode>> local_decls = parseLocalDecls();
+  std::vector<std::unique_ptr<ASTnode>> stmt_list = parseStmtList();
+
+  if (CurTok.type != RBRA) error(CurTok, "Expected } in block");
+  getNextToken(); // eat }
+
+  return std::make_unique<BlockASTnode>(std::move(local_decls), std::move(stmt_list), saveToken);
+};
+
+// local_decls ::= local_decl local_decls | empty
+static std::vector<std::unique_ptr<ASTnode>> parseLocalDecls() {
+  std::vector<std::unique_ptr<ASTnode>> local_decls;
+  while (CurTok.type == INT_TOK || CurTok.type == FLOAT_TOK || CurTok.type == BOOL_TOK) {
+    local_decls.push_back(parseLocalDecl());
+  }
+  return local_decls;
+};
+
+// local_decl ::= var_type IDENT ";"
+static std::unique_ptr<ASTnode> parseLocalDecl() {
+  std::unique_ptr<TypeASTnode> type = parseVarType();
+
+  if (CurTok.type != IDENT) error(CurTok, "Expected identifier in local declaration");
+  std::string declName = CurTok.lexeme;
+  TOKEN saveToken = CurTok;
+  getNextToken(); // eat IDENT
+
+  if (CurTok.type != SC) error(CurTok, "Expected ; at the end of a local declaration");
+  getNextToken(); // eat ;
+  return std::make_unique<VarDeclASTnode>(std::move(type), declName, saveToken);
+};
+
+// stmt_list ::= stmt stmt_list | empty
+static std::vector<std::unique_ptr<ASTnode>> parseStmtList() {
+  std::vector<std::unique_ptr<ASTnode>> stmt_list;
+  while (CurTok.type != RBRA) {
+    stmt_list.push_back(parseStmt());
+  }
+  return stmt_list;
+};
+
+// stmt ::= expr_stmt | block | if_stmt | while_stmt | return_stmt
+static std::unique_ptr<ASTnode> parseStmt() {
+  switch (CurTok.type)
+  {
+  case LBRA:
+    return parseBlock();
+    break;
+  case IF:
+    return parseIfStmt();
+    break;
+  case WHILE:
+    return parseWhileStmt();
+    break;
+  case RETURN:
+    return parseReturnStmt();
+    break;
+  default:
+    return parseExprStmt();
+    break;
+  }
+};
+
+// expr_stmt ::= expr ";"
+static std::unique_ptr<ASTnode> parseExprStmt() {
+  std::unique_ptr<ASTnode> expr = parseExpr();
+
+  if (CurTok.type != SC) error(CurTok, "Expected ; in expression statement");
+  getNextToken(); // eat ;
+  return expr;
+};
+
+// while_stmt ::= "while" "(" expr ")" stmt
+static std::unique_ptr<ASTnode> parseWhileStmt() {
+  if (CurTok.type != WHILE) error(CurTok, "Expected while in while statement"); // maybe not needed
+  TOKEN saveToken = CurTok;
+  getNextToken(); // eat while
+
+  if (CurTok.type != LPAR) error(CurTok, "Expected ( in while statement");
+  getNextToken(); // eat (
+
+  std::unique_ptr<ASTnode> expr = parseExpr();
+
+  if (CurTok.type != RPAR) error(CurTok, "Expected ) in while statement");
+  getNextToken(); // eat )
+
+  std::unique_ptr<ASTnode> stmt = parseStmt();
+
+  return std::make_unique<WhileASTnode>(std::move(expr), std::move(stmt), saveToken);
+};
+
+// if_stmt ::= "if" "(" expr ")" block else_stmt
+static std::unique_ptr<ASTnode> parseIfStmt() {
+  if (CurTok.type != IF) error(CurTok, "Expected if in if statement"); // maybe not needed
+  TOKEN saveToken = CurTok;
+  getNextToken(); // eat if
+
+  if (CurTok.type != LPAR) error(CurTok, "Expected ( in if statement");
+  getNextToken(); // eat (
+
+  std::unique_ptr<ASTnode> expr = parseExpr();
+
+  if (CurTok.type != RPAR) error(CurTok, "Expected ) in if statement");
+  getNextToken(); // eat )
+
+  std::unique_ptr<ASTnode> block = parseBlock();
+
+  std::unique_ptr<ASTnode> else_stmt = parseElseStmt();
+
+  return std::make_unique<IfASTnode>(std::move(expr), std::move(block), std::move(else_stmt), saveToken);
+};
+
+// else_stmt ::= "else" block | empty
+static std::unique_ptr<ASTnode> parseElseStmt() {
+  if (CurTok.type == ELSE) {
+    getNextToken(); // eat else
+    return parseBlock();
+  } else {
+    return nullptr;
+  }
+};
+
+// return_stmt ::= "return" ";" | "return" expr ";"
+static std::unique_ptr<ASTnode> parseReturnStmt() {
+  TOKEN saveToken = CurTok;
+  getNextToken(); // eat return
+
+  if (CurTok.type == SC) {
+    getNextToken(); // eat ;
+    return std::make_unique<ReturnASTnode>(nullptr, saveToken);
+  } else {
+    std::unique_ptr<ASTnode> expr = parseExpr();
+
+    if (CurTok.type != SC) error(CurTok, "Expected ; in return statement");
+    getNextToken(); // eat ;
+    return std::make_unique<ReturnASTnode>(std::move(expr), saveToken);
+  }
+};
+
+// expr ::= IDENT "=" expr | op1
+static std::unique_ptr<ASTnode> parseExpr() {
   if (CurTok.type == IDENT) {
-    getNextToken();
-    return std::make_unique<VariableASTnode>(tok, IdentifierStr);
+    std::string identName = CurTok.lexeme;
+    TOKEN saveToken = CurTok;
+    getNextToken(); // eat IDENT
+
+    if (CurTok.type == ASSIGN) {
+      getNextToken(); // eat =
+      return std::make_unique<AssignASTnode>(identName, parseExpr(), saveToken);
+    } else {
+      putBackToken(CurTok);
+      CurTok = saveToken;
+      return parseOp1();  // parse operation with IDENT as first operand
+    }
   } else {
-    fprintf(stderr, "Error: Expected variable\n");
-    exit(1);
+    return parseOp1();
+  }
+};
+
+// op1 ::= op2 op1'
+static std::unique_ptr<ASTnode> parseOp1() {
+  std::unique_ptr<ASTnode> op2 = parseOp2();
+  return parseOp1Prime(std::move(op2));
+};
+
+// op1' ::= "||" op2 op1' | empty
+static std::unique_ptr<ASTnode> parseOp1Prime(std::unique_ptr<ASTnode> op2) {
+  if (CurTok.type == OR) {
+    TOKEN saveToken = CurTok;
+    getNextToken(); // eat ||
+    std::unique_ptr<ASTnode> op2_prime = parseOp2();
+    return parseOp1Prime(std::make_unique<BinOpNode>("||", std::move(op2), std::move(op2_prime), saveToken));
+  } else {
+    return op2;
+  }
+};
+
+// op2 ::= op3 op2'
+static std::unique_ptr<ASTnode> parseOp2() {
+  std::unique_ptr<ASTnode> op3 = parseOp3();
+  return parseOp2Prime(std::move(op3));
+};
+
+// op2' ::= "&&" op3 op2' | empty
+static std::unique_ptr<ASTnode> parseOp2Prime(std::unique_ptr<ASTnode> op3) {
+  if (CurTok.type == AND) {
+    TOKEN saveToken = CurTok;
+    getNextToken(); // eat &&
+    std::unique_ptr<ASTnode> op3_prime = parseOp3();
+    return parseOp2Prime(std::make_unique<BinOpNode>("&&", std::move(op3), std::move(op3_prime), saveToken));
+  } else {
+    return op3;
+  }
+};
+
+// op3 ::= op4 op3'
+static std::unique_ptr<ASTnode> parseOp3() {
+  std::unique_ptr<ASTnode> op4 = parseOp4();
+  return parseOp3Prime(std::move(op4));
+};
+
+// op3' ::= "==" op4 op3' | "!=" op4 op3' | empty
+static std::unique_ptr<ASTnode> parseOp3Prime(std::unique_ptr<ASTnode> op4) {
+  TOKEN saveToken = CurTok;
+  if (CurTok.type == EQ) {
+    getNextToken(); // eat ==
+    std::unique_ptr<ASTnode> op4_prime = parseOp4();
+    return parseOp3Prime(std::make_unique<BinOpNode>("==", std::move(op4), std::move(op4_prime), saveToken));
+  } else if (CurTok.type == NE) {
+    getNextToken(); // eat !=
+    std::unique_ptr<ASTnode> op4_prime = parseOp4();
+    return parseOp3Prime(std::make_unique<BinOpNode>("!=", std::move(op4), std::move(op4_prime), saveToken));
+  } else {
+    return op4;
+  }
+};
+
+// op4 ::= op5 op4'
+static std::unique_ptr<ASTnode> parseOp4() {
+  std::unique_ptr<ASTnode> op5 = parseOp5();
+  return parseOp4Prime(std::move(op5));
+};
+
+// op4' ::= "<=" op5 op4' | "<" op5 op4' | ">=" op5 op4' | ">" op5 op4' | empty
+static std::unique_ptr<ASTnode> parseOp4Prime(std::unique_ptr<ASTnode> op5) {
+  TOKEN saveToken = CurTok;
+  if (CurTok.type == LE) {
+    getNextToken(); // eat <=
+    std::unique_ptr<ASTnode> op5_prime = parseOp5();
+    return parseOp4Prime(std::make_unique<BinOpNode>("<=", std::move(op5), std::move(op5_prime), saveToken));
+  } else if (CurTok.type == LT) {
+    getNextToken(); // eat <
+    std::unique_ptr<ASTnode> op5_prime = parseOp5();
+    return parseOp4Prime(std::make_unique<BinOpNode>("<", std::move(op5), std::move(op5_prime), saveToken));
+  } else if (CurTok.type == GE) {
+    getNextToken(); // eat >=
+    std::unique_ptr<ASTnode> op5_prime = parseOp5();
+    return parseOp4Prime(std::make_unique<BinOpNode>(">=", std::move(op5), std::move(op5_prime), saveToken));
+  } else if (CurTok.type == GT) {
+    getNextToken(); // eat >
+    std::unique_ptr<ASTnode> op5_prime = parseOp5();
+    return parseOp4Prime(std::make_unique<BinOpNode>(">", std::move(op5), std::move(op5_prime), saveToken));
+  } else {
+    return op5;
+  }
+};
+
+// op5 ::= op6 op5'
+static std::unique_ptr<ASTnode> parseOp5() {
+  std::unique_ptr<ASTnode> op6 = parseOp6();
+  return parseOp5Prime(std::move(op6));
+};
+
+// op5' ::= "+" op6 op5' | "-" op6 op5' | empty
+static std::unique_ptr<ASTnode> parseOp5Prime(std::unique_ptr<ASTnode> op6) {
+  TOKEN saveToken = CurTok;
+  if (CurTok.type == PLUS) {
+    getNextToken(); // eat +
+    std::unique_ptr<ASTnode> op6_prime = parseOp6();
+    return parseOp5Prime(std::make_unique<BinOpNode>("+", std::move(op6), std::move(op6_prime), saveToken));
+  } else if (CurTok.type == MINUS) {
+    getNextToken(); // eat -
+    std::unique_ptr<ASTnode> op6_prime = parseOp6();
+    return parseOp5Prime(std::make_unique<BinOpNode>("-", std::move(op6), std::move(op6_prime), saveToken));
+  } else {
+    return op6;
+  }
+};
+
+// op6 ::= op7 op6'
+static std::unique_ptr<ASTnode> parseOp6() {
+  std::unique_ptr<ASTnode> op7 = parseOp7();
+  return parseOp6Prime(std::move(op7));
+};
+
+// op6' ::= "*" op7 op6' | "/" op7 op6' | "%" op7 op6' | empty
+static std::unique_ptr<ASTnode> parseOp6Prime(std::unique_ptr<ASTnode> op7) {
+  TOKEN saveToken = CurTok;
+  if (CurTok.type == ASTERIX) {
+    getNextToken(); // eat *
+    std::unique_ptr<ASTnode> op7_prime = parseOp7();
+    return parseOp6Prime(std::make_unique<BinOpNode>("*", std::move(op7), std::move(op7_prime), saveToken));
+  } else if (CurTok.type == DIV) {
+    getNextToken(); // eat /
+    std::unique_ptr<ASTnode> op7_prime = parseOp7();
+    return parseOp6Prime(std::make_unique<BinOpNode>("/", std::move(op7), std::move(op7_prime), saveToken));
+  } else if (CurTok.type == MOD) {
+    getNextToken(); // eat %
+    std::unique_ptr<ASTnode> op7_prime = parseOp7();
+    return parseOp6Prime(std::make_unique<BinOpNode>("%", std::move(op7), std::move(op7_prime), saveToken));
+  } else {
+    return op7;
+  }
+};
+
+// op7 ::= "-" op7 | "!" op7 | op8
+static std::unique_ptr<ASTnode> parseOp7() {
+  TOKEN saveToken = CurTok;
+  if (CurTok.type == MINUS) {
+    getNextToken(); // eat -
+    std::unique_ptr<ASTnode> op7 = parseOp7();
+    return std::make_unique<UnaryOpNode>("-", std::move(op7), saveToken);
+  } else if (CurTok.type == NOT) {
+    getNextToken(); // eat !
+    std::unique_ptr<ASTnode> op7 = parseOp7();
+    return std::make_unique<UnaryOpNode>("!", std::move(op7), saveToken);
+  } else {
+    return parseOp8();
+  }
+};
+
+// op8 ::= "(" expr ")" | op9
+static std::unique_ptr<ASTnode> parseOp8() {
+  if (CurTok.type == LPAR) {
+    getNextToken(); // eat (
+    std::unique_ptr<ASTnode> expr = parseExpr();
+    if (CurTok.type != RPAR) error(CurTok, "Expected ) in expression");
+    getNextToken(); // eat )
+    return expr;
+  } else {
+    return parseOp9();
+  }
+};
+
+// op9 ::= IDENT | IDENT "(" args ")" | op10
+static std::unique_ptr<ASTnode> parseOp9() {
+  TOKEN saveToken = CurTok;
+  if (CurTok.type == IDENT) {
+    std::string identName = CurTok.lexeme;
+    getNextToken(); // eat IDENT
+    if (CurTok.type == LPAR) {
+      getNextToken(); // eat (
+      std::vector<std::unique_ptr<ASTnode>> args = parseArgs();
+      if (CurTok.type != RPAR) error(CurTok, "Expected ) in function call");
+      getNextToken(); // eat )
+      return std::make_unique<CallASTnode>(identName, std::move(args), saveToken);
+    } else {
+      return std::make_unique<IdentASTnode>(identName, saveToken);
+    }
+  } else {
+    return parseOp10();
+  }
+};
+
+// op10 ::= INT_LIT | FLOAT_LIT | BOOL_LIT
+static std::unique_ptr<ASTnode> parseOp10() {
+  TOKEN saveToken = CurTok;
+  if (CurTok.type == INT_LIT) {
+    int intVal = std::stoi(CurTok.lexeme);
+    getNextToken(); // eat INT_LIT
+    return std::make_unique<IntASTnode>(intVal, saveToken);
+  } else if (CurTok.type == FLOAT_LIT) {
+    float floatVal = std::stof(CurTok.lexeme);
+    getNextToken(); // eat FLOAT_LIT
+    return std::make_unique<FloatASTnode>(floatVal, saveToken);
+  } else if (CurTok.type == BOOL_LIT) {
+    bool boolVal = (CurTok.lexeme == "true");
+    getNextToken(); // eat BOOL_LIT
+    return std::make_unique<BoolASTnode>(boolVal, saveToken);
+  } else {
+    error(CurTok, "Expected an expression here");
+    return nullptr;
   }
 };
 
 
+// args ::= arg_list | empty
+static std::vector<std::unique_ptr<ASTnode>> parseArgs() {
+  std::vector<std::unique_ptr<ASTnode>> args;
+  if (CurTok.type == RPAR) {
+    return args;
+  } else {
+    args = parseArgList();
+    return std::move(args);
+  }
+};
 
+// arg_list ::= expr "," arg_list | expr
+static std::vector<std::unique_ptr<ASTnode>> parseArgList() {
+  std::vector<std::unique_ptr<ASTnode>> args;
+  args.push_back(parseExpr());
+  while (CurTok.type == COMMA) {
+    getNextToken(); // eat ,
+    args.push_back(parseExpr());
+  }
+  return std::move(args);
+};
 
 static void parser() {
-  // add body
-}
-
-/// LogError* - These are little helper functions for error handling.
-std::unique_ptr<ASTnode> LogError(const char *Str) {
-  fprintf(stderr, "Error: %s\n", Str);
-  return nullptr;
-}
-std::unique_ptr<ASTnode> LogErrorP(const char *Str) {
-  LogError(Str);
-  return nullptr;
+  getNextToken();
+  std::unique_ptr<ProgramASTnode> tree = parseProgram();
+  fprintf(stdout, "Parsed program\n");
+  fprintf(stdout, "Printing AST\n");
+  fprintf(stdout, "%s", tree->to_tree().c_str());
+  tree->codegen();
 }
 
 //===----------------------------------------------------------------------===//
 // Code Generation
 //===----------------------------------------------------------------------===//
 
-static LLVMContext TheContext;
-static IRBuilder<> Builder(TheContext);
-static std::unique_ptr<Module> TheModule;
 
 //===----------------------------------------------------------------------===//
 // AST Printer
@@ -650,20 +633,19 @@ int main(int argc, char **argv) {
   columnNo = 1;
 
   // get the first token
-  getNextToken();
-  while (CurTok.type != EOF_TOK) {
-    fprintf(stderr, "Token: %s with type %d\n", CurTok.lexeme.c_str(),
-            CurTok.type);
-    getNextToken();
-  }
-  fprintf(stderr, "Lexer Finished\n");
+  // getNextToken();
+  // while (CurTok.type != EOF_TOK) {
+  //   fprintf(stderr, "Token: %s with type %d\n", CurTok.lexeme.c_str(),
+  //           CurTok.type);
+  //   getNextToken();
+  // }
+  // fprintf(stderr, "Lexer Finished\n");
 
   // Make the module, which holds all the code.
   TheModule = std::make_unique<Module>("mini-c", TheContext);
 
   // Run the parser now.
   parser();
-  fprintf(stderr, "Parsing Finished\n");
 
   //********************* Start printing final IR **************************
   // Print out all of the generated code into a file called output.ll
@@ -680,5 +662,6 @@ int main(int argc, char **argv) {
   //********************* End printing final IR ****************************
 
   fclose(pFile); // close the file that contains the code that was parsed
+  printWarnings();
   return 0;
 }
