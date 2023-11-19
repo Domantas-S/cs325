@@ -7,12 +7,13 @@ set -e
 #export LLVM_INSTALL_PATH=/tmp/LLVM/llvm-14.0.6
 #export LLVM_INSTALL_PATH=/modules/cs325/llvm-15.0.0
 #export LLVM_INSTALL_PATH=/modules/cs325/llvm-16.0.0
-export LLVM_INSTALL_PATH=/modules/cs325/llvm-17.0.1
-export PATH=$LLVM_INSTALL_PATH/bin:$PATH
-export LD_LIBRARY_PATH=$LLVM_INSTALL_PATH/lib:$LD_LIBRARY_PATH
-CLANG=$LLVM_INSTALL_PATH/bin/clang++
+# export LLVM_INSTALL_PATH=/usr/bin/llvm-gcc
+# export PATH=$LLVM_INSTALL_PATH/bin:$PATH
+# export LD_LIBRARY_PATH=$LLVM_INSTALL_PATH/lib:$LD_LIBRARY_PATH
+# CLANG=$LLVM_INSTALL_PATH/bin/clang++
+CLANG=clang++
 
-module load GCC/12.2.0
+# module load GCC/12.2.0
 
 DIR="$(pwd)"
 

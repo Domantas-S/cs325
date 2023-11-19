@@ -593,9 +593,9 @@ static std::vector<std::unique_ptr<ASTnode>> parseArgList() {
 static void parser() {
   getNextToken();
   std::unique_ptr<ProgramASTnode> tree = parseProgram();
-  fprintf(stdout, "Parsed program\n");
-  fprintf(stdout, "Printing AST\n");
-  fprintf(stdout, "%s", tree->to_tree().c_str());
+  // fprintf(stdout, "Parsed program\n");
+  // fprintf(stdout, "Printing AST\n");
+  // fprintf(stdout, "%s", tree->to_tree().c_str());
   tree->codegen();
 }
 

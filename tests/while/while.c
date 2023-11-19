@@ -1,19 +1,13 @@
-// MiniC program to test while loop
-
 extern int print_int(int X);
+extern float print_float(float X);
 
-int test;
-float f;
-bool b;
+int foo(int x) {
+    while (x < 10)
+        if (x < 5) {
+            x = x + 2;
+        } else {
+            x = x + 1;
+        }
 
-int While(int n){
-  int result;
-  test = 11 + 1;
-  result = 0;
-  print_int(test); 
-  while(result < 10)
-    result = result + 1;  
-    //print_int(result);    
-   
-  return result;
+    return x;
 }

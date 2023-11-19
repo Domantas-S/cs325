@@ -9,8 +9,6 @@ entry:
   %addtmp = add i32 %mutable_var, 1
   store i32 %addtmp, ptr @mutable_var, align 4
   ret i32 1
-  ret i32 0
-  ret i32 0
 }
 
 define i32 @lazyeval_and(i32 %control) {

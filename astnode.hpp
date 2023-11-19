@@ -48,6 +48,13 @@ static std::vector<std::map<std::string, AllocaInst *>> NamedValues;  // local v
 static std::map<std::string, GlobalVariable*> GlobalNamedValues; // global var table
 AllocaInst *CreateEntryBlockAlloca(Function *TheFunction, const std::string &VarName, Type *type);
 Value *castToType(Value *val, Type *type, TOKEN tok);
+Type *getWidestType(Type *type1, Type *type2);
+std::string typeToString(Type *type);
+Type* getLLVMType(std::string Val);
+Value* lazyAnd(std::unique_ptr<ASTnode> LHS, std::unique_ptr<ASTnode> RHS, TOKEN tok);
+Value* lazyOr(std::unique_ptr<ASTnode> LHS, std::unique_ptr<ASTnode> RHS, TOKEN tok);
+
+
 
 
 // Generate LHS, if false, immediately jump to end and return false, otherwise generate RHS, and return true if RHS is true
@@ -259,7 +266,7 @@ Value *castToType(Value *val, Type *type, TOKEN tok)
     }
     if (val->getType() == Type::getInt1Ty(TheContext) && type == Type::getInt32Ty(TheContext))
     {
-        return Builder.CreateIntCast(val, type, true, "BtoSIcast"); // bool to int
+        return Builder.CreateIntCast(val, type, false, "BtoSIcast"); // bool to int
     }
     error(tok, "Unsupported cast of " + typeToString(val->getType()) + " to " + typeToString(type));
     return nullptr;
@@ -563,7 +570,9 @@ public:
                 return Builder.CreateNot(R, "nottmp");  // hope behaviour is same as C: 0 -> 1 and non-zero -> 0
             }
             else if(R->getType()->isFloatingPointTy()){
-                return Builder.CreateNot(R, "nottmp"); // hope behaviour is same as C: 0.0 -> 1 and non-zero -> 0
+                // cast to bool
+                Value* casted = castToType(R, Type::getInt1Ty(TheContext), Tok);
+                return Builder.CreateNot(casted, "nottmp"); // hope behaviour is same as C: 0.0 -> 1 and non-zero -> 0
             }
             else{
                 error(Tok, "Unknown type for ! operator");
@@ -667,12 +676,12 @@ public:
         // set var table for function
         NamedValues.push_back(std::map<std::string, AllocaInst *>());
 
-        fprintf(stdout, "DEBUG: FunctionASTnode::codegen(): Function parameters handled\n");
+        // fprintf(stdout, "DEBUG: FunctionASTnode::codegen(): Function parameters handled\n");
         // handle function parameters
         unsigned Idx = 0;
         for (auto &Arg : F->args()){
             Arg.setName(Params[Idx]->getName());
-            fprintf(stdout, "DEBUG: %s\n", Arg.getName().str().c_str());
+            // fprintf(stdout, "DEBUG: %s\n", Arg.getName().str().c_str());
             AllocaInst *Alloca = CreateEntryBlockAlloca(F, Arg.getName().str(), Arg.getType());
             Builder.CreateStore(&Arg, Alloca);
             NamedValues.back()[Arg.getName().str()] = Alloca;
@@ -681,22 +690,22 @@ public:
 
         // generate function body
         Value* RetVal = Body->codegen();
-        if(!verifyFunction(*F)){ // If there are no errors, the verifyFunction returns false
-            fprintf(stdout, "DEBUG: FunctionASTnode::codegen(): Function verified\n");
+        // check if function ends with a return
+        if(verifyFunction(*F)){ // If there are no errors, the verifyFunction returns false
+            // fprintf(stdout, "DEBUG: FunctionASTnode::codegen(): Function verified\n");
             // create return instruction
             if (TypeNode.get()->getType() == Type::getVoidTy(TheContext))
             {
+                // fprintf(stdout, "DEBUG: FunctionASTnode::codegen(): Void function\n");
                 Builder.CreateRetVoid();
             }
             else
             {
-                Builder.CreateRet(RetVal);
+                // fprintf(stdout, "DEBUG: Return value type: %s\n", typeToString(RetVal->getType()).c_str());
+                Builder.CreateRet(Constant::getNullValue(TypeNode->getType()));
             }
         }
-        else{
-            fprintf(stdout, "DEBUG: FunctionASTnode::codegen(): Function not verified\n");
-        }
-        
+
         // clear local vars
         NamedValues.pop_back();
         return F;
@@ -789,11 +798,6 @@ class IfASTnode : public ASTnode
 public:
     IfASTnode(std::unique_ptr<ASTnode> cond, std::unique_ptr<ASTnode> then, std::unique_ptr<ASTnode> else_, TOKEN tok) : Cond(std::move(cond)), Then(std::move(then)), Else(std::move(else_)), Tok(tok) {}
     Value *codegen() { 
-        Function* TheFunction = Builder.GetInsertBlock()->getParent();
-        BasicBlock* thenBlock = BasicBlock::Create(TheContext, "then", TheFunction);
-        BasicBlock* elseBlock = BasicBlock::Create(TheContext, "end", TheFunction);
-        BasicBlock* mergeBlock = BasicBlock::Create(TheContext, "ifcont", TheFunction);
-
         Value* CondV = Cond->codegen();
         if(!CondV){
             error(Tok, "Error in IfASTnode::codegen(): CondV is nullptr");
@@ -804,6 +808,11 @@ public:
 
         // convert condition to bool
         castToType(CondV, Type::getInt1Ty(TheContext), Tok);
+
+        Function* TheFunction = Builder.GetInsertBlock()->getParent();
+        BasicBlock* thenBlock = BasicBlock::Create(TheContext, "then", TheFunction);
+        BasicBlock* elseBlock = BasicBlock::Create(TheContext, "else");
+        BasicBlock* mergeBlock = BasicBlock::Create(TheContext, "ifcont");
 
         // generate else branching
         if (Else){
@@ -816,6 +825,8 @@ public:
         // generate then block
         Builder.SetInsertPoint(thenBlock);
         Value* ThenV = Then->codegen();
+        //  if (!ThenV)
+        //     return nullptr;
 
         Builder.CreateBr(mergeBlock);
         thenBlock = Builder.GetInsertBlock();
@@ -825,8 +836,12 @@ public:
             TheFunction->insert(TheFunction->end(), elseBlock);
             Builder.SetInsertPoint(elseBlock);
             Value* ElseV = Else->codegen();
+            // if (!ElseV)
+            //     return nullptr;
         }
         Builder.CreateBr(mergeBlock);
+
+        TheFunction->insert(TheFunction->end(), mergeBlock);
         Builder.SetInsertPoint(mergeBlock);
         return nullptr;
     };
@@ -859,7 +874,7 @@ class WhileASTnode : public ASTnode
 public:
     WhileASTnode(std::unique_ptr<ASTnode> cond, std::unique_ptr<ASTnode> body, TOKEN tok) : Cond(std::move(cond)), Body(std::move(body)), Tok(tok) {}
     Value *codegen() { 
-        fprintf(stdout, "DEBUG: WhileASTnode::codegen()\n");
+        // fprintf(stdout, "DEBUG: WhileASTnode::codegen()\n");
         Function* TheFunction = Builder.GetInsertBlock()->getParent();
         BasicBlock* condBlock = BasicBlock::Create(TheContext, "cond", TheFunction);
         BasicBlock* bodyBlock = BasicBlock::Create(TheContext, "body", TheFunction);
@@ -964,11 +979,20 @@ public:
             return nullptr;
         }
 
-        // generate code for args
+
+
+        // generate code for args and check if types match
+        unsigned Idx = 0;
         std::vector<Value *> ArgsV;
         for (auto &a : Args)
         {
-            ArgsV.push_back(a->codegen());
+            Value *argVal = a->codegen();
+            if (argVal->getType() != CalleeF->getArg(Idx)->getType())
+            {
+                error(Tok, "Incorrect type of argument index " + std::to_string(Idx) + " passed to function " + Callee + "\n\tExpected: " + typeToString(CalleeF->getArg(Idx)->getType()) + " but got: " + typeToString(argVal->getType()));
+                return nullptr;
+            }
+            ArgsV.push_back(argVal);
         }
 
         return Builder.CreateCall(CalleeF, ArgsV, "calltmp");
@@ -1009,20 +1033,18 @@ public:
                 return nullptr;
             }
             // create global variable
-            GlobalNamedValues[Name] = new GlobalVariable(*TheModule, Type->getType(), false, GlobalValue::ExternalLinkage, nullptr, Name);
+            GlobalNamedValues[Name] = new GlobalVariable(*TheModule, Type->getType(), false, GlobalValue::CommonLinkage, Constant::getNullValue(Type->getType()), Name);
             return GlobalNamedValues[Name];
         }
         
         Function *TheFunction = Builder.GetInsertBlock()->getParent();
-        // check if local variable already exists
-        // loop through local contexts
-        for (int i = NamedValues.size() - 1; i >= 0; i--){
-            if (NamedValues[i].find(Name) != NamedValues[i].end())
-            {
-                error(Tok, "Local variable " + Name + " already exists");
-                return nullptr;
-            }
+        // check if local variable already exists in CURRENT context
+        if (NamedValues.back().find(Name) != NamedValues.back().end())
+        {
+            error(Tok, "Variable " + Name + " already exists in current context");
+            return nullptr;
         }
+        
         // create local variable
         AllocaInst *Alloca = CreateEntryBlockAlloca(TheFunction, Name, Type->getType());
         NamedValues.back()[Name] = Alloca;
@@ -1088,9 +1110,12 @@ public:
     virtual ~BlockASTnode() {}
 
     Value *codegen() { 
-        fprintf(stdout, "DEBUG: BlockASTnode::codegen()\n");
+        // fprintf(stdout, "DEBUG: BlockASTnode::codegen()\n");
         // check if in a function
         Function *TheFunction = Builder.GetInsertBlock()->getParent();
+
+        // create new local context
+        NamedValues.push_back(std::map<std::string, AllocaInst *>());
 
         // generate code for local declarations
         for (auto &l : local_decls)
@@ -1100,9 +1125,16 @@ public:
         // generate code for statements
         for (auto &s : stmt_list)
         {
-            s->codegen();
+            Value* val = s->codegen();
+            // check if statement is a return, if it is, then don't generate code for the rest of the block
+            if (val && isa<ReturnInst>(val))
+            {
+                break;
+            }
         }
-    
+        
+        // clear local context
+        NamedValues.pop_back();
         return nullptr;
     };
 
@@ -1134,14 +1166,14 @@ public:
     IdentASTnode(std::string name, TOKEN tok) : Name(name), Tok(tok) {}
     virtual ~IdentASTnode() {}
     Value *codegen() { 
-        fprintf(stdout, "DEBUG: IdentASTnode::codegen()\n");
+        // fprintf(stdout, "DEBUG: IdentASTnode::codegen()\n");
         // fprintf(stdout, "DEBUG: %s\n", NamedValues[0][Name]->getName().str().c_str());
         // check local contexts first
         if (NamedValues.size() != 0){
             for (int i = NamedValues.size() - 1; i >= 0; i--){
                 if (NamedValues[i].find(Name) != NamedValues[i].end())
                 {
-                    fprintf(stdout, "DEBUG: Type: %s\n", typeToString(NamedValues[i][Name]->getAllocatedType()).c_str());
+                    // fprintf(stdout, "DEBUG: Type: %s\n", typeToString(NamedValues[i][Name]->getAllocatedType()).c_str());
                     return Builder.CreateLoad(NamedValues[i][Name]->getAllocatedType(), NamedValues[i][Name], Name.c_str());
                 }
             }
@@ -1173,7 +1205,7 @@ public:
     AssignASTnode(std::string name, std::unique_ptr<ASTnode> expr, TOKEN tok) : Name(name), Expr(std::move(expr)), Tok(tok) {}
     virtual ~AssignASTnode() {}
     Value *codegen() {
-        fprintf(stdout, "DEBUG: AssignASTnode::codegen()\n");
+        // fprintf(stdout, "DEBUG: AssignASTnode::codegen()\n");
         Value* val = Expr->codegen();
         if(!val){
             error(Tok, "Error in AssignASTnode::codegen(): val is nullptr");
@@ -1182,7 +1214,7 @@ public:
             error(Tok, "Cannot assign a void value to a variable!");
         }
         
-        fprintf(stdout, "DEBUG1: %s\n", Name.c_str());
+        // fprintf(stdout, "DEBUG1: %s\n", Name.c_str());
         // check if local variable exists
         if (NamedValues.size() != 0){
             for (int i = NamedValues.size() - 1; i >= 0; i--){
@@ -1190,19 +1222,19 @@ public:
                 {
                     // cast to correct type (will warn if narrowing conversion)
                     val = castToType(val, NamedValues[i][Name]->getAllocatedType(), Tok);
-                    return Builder.CreateStore(val, NamedValues[i][Name]);
+                    Builder.CreateStore(val, NamedValues[i][Name]);
+                    return val;
                 }
             }
         }
-        else if (GlobalNamedValues.find(Name) != GlobalNamedValues.end())
+        if (GlobalNamedValues.find(Name) != GlobalNamedValues.end())
         {
             // cast to correct type (will warn if narrowing conversion)
             val = castToType(val, GlobalNamedValues[Name]->getValueType(), Tok);
-            return Builder.CreateStore(val, GlobalNamedValues[Name]);
+            Builder.CreateStore(val, GlobalNamedValues[Name]);
+            return val;
         }
-        else{
-            error(Tok, "Unknown variable name");
-        }
+        error(Tok, "Unknown variable name");
         return nullptr;
     };
     

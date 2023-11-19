@@ -20,12 +20,12 @@ extern "C" DLLEXPORT float print_float(float X) {
 }
 
 extern "C" {
-    int foo(int x);
+    int global();
 }
 
 int main() {
-    if(foo(2) == 10)
-      std::cout << "PASSED Result: " << foo(2) << std::endl;
+    if(global() == 6)
+      std::cout << "PASSED Result: " << global() << std::endl;
   	else 
-  	  std::cout << "FALIED Result: " << foo(2) << std::endl;
+  	  std::cout << "FALIED Result: " << global() << std::endl;
 }
