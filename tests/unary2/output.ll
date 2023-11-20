@@ -23,18 +23,18 @@ entry:
   %f1 = load float, ptr %f, align 4
   %FPtoBcast = fptosi float %f1 to i1
   %nottmp = xor i1 %FPtoBcast, true
-  %negtmp = sub i1 false, %nottmp
+  %BtoSIcast = zext i1 %nottmp to i32
+  %negtmp = sub i32 0, %BtoSIcast
   %i3 = load i32, ptr %i, align 4
-  %BtoSIcast = zext i1 %negtmp to i32
-  %addtmp = add i32 %BtoSIcast, %i3
+  %addtmp = add i32 %negtmp, %i3
   %SItoBcast = trunc i32 %addtmp to i1
   store i1 %SItoBcast, ptr %b, align 1
   %f4 = load float, ptr %f, align 4
   %FPtoBcast5 = fptosi float %f4 to i1
   %nottmp6 = xor i1 %FPtoBcast5, true
-  %negtmp7 = sub i1 false, %nottmp6
-  %BtoSIcast8 = zext i1 %negtmp7 to i32
-  store i32 %BtoSIcast8, ptr %z2, align 4
+  %BtoSIcast7 = zext i1 %nottmp6 to i32
+  %negtmp8 = sub i32 0, %BtoSIcast7
+  store i32 %negtmp8, ptr %z2, align 4
   br label %lhs
 
 lhs:                                              ; preds = %entry
