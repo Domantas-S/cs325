@@ -153,6 +153,7 @@ static std::unique_ptr<TypeASTnode> parseVarType()
   }
 };
 
+// Not needed since we are parsing function declarations in due to lookahead requirement parseDecl()
 // fun_decl ::= type_spec IDENT "(" params ")" block
 static std::unique_ptr<FunctionASTnode> parseFunctionDecl()
 {
